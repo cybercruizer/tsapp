@@ -1,0 +1,8 @@
+{
+  "name": "MKD-Timestamp",
+  "description": "Add customizable, professional timestamps and location data to your photos using Canvas and AI for metadata extraction.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}
