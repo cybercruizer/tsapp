@@ -175,6 +175,11 @@ app.get('/api/geocode/search', async (req, res) => {
   }
 });
 
+// Health check route
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
 
@@ -188,7 +193,8 @@ async function startServer() {
   } else {
     // Production mode with built assets
     app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (_req, res) => {
+    // In Express 5, use middleware instead of app.get('*') to avoid path-to-regexp wildcard syntax error
+    app.use((_req, res) => {
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));
     });
   }
