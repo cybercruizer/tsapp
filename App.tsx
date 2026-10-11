@@ -1,370 +1,484 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Upload, Download, MapPin, Calendar, Type, Sliders, Wand2, RefreshCcw, LayoutTemplate, Share2, Map as MapIcon, X, Plus, Trash2, Save } from 'lucide-react';
+import {
+  Upload,
+  Download,
+  MapPin,
+  Calendar,
+  Clock,
+  Type,
+  Sliders,
+  Sparkles,
+  RefreshCcw,
+  LayoutTemplate,
+  Share2,
+  Map as MapIcon,
+  X,
+  Trash2,
+  Save,
+  RotateCw,
+  Camera,
+  Layers,
+  FileText,
+  Compass,
+  Sun,
+  Eye,
+  Info,
+  CheckCircle2,
+  Copy
+} from 'lucide-react';
 import { ImageCanvas } from './components/ImageCanvas';
 import { Button } from './components/Button';
-import { StampSettings, TextPosition, DateFormat, TemplateStyle } from './types';
+import { MapPickerModal } from './components/MapPickerModal';
+import { CameraModal } from './components/CameraModal';
+import { StampSettings, TextPosition, DateFormat, TemplateStyle, TemplatePreset } from './types';
 import { analyzeImageForMetadata } from './services/geminiService';
 
-// Declare globals for libraries loaded via CDN
-declare var L: any;
 declare var piexif: any;
 
-const DEFAULT_SETTINGS: StampSettings = {
-  templateStyle: TemplateStyle.SIMPLE,
-  textPosition: TextPosition.BOTTOM_RIGHT,
-  showDate: true,
-  customDate: new Date().toISOString().slice(0, 16),
-  dateFormat: DateFormat.LOCAL,
-  showLocation: true,
-  customLocation: '',
-  showCoordinates: false,
-  customCoordinates: '',
-  showMapOverlay: false,
-  
-  // Default sizes
-  timeFontSize: 32,
-  dateFontSize: 24,
-  locationFontSize: 20,
-  coordinatesFontSize: 16,
-
-  textColor: '#ffffff',
-  textShadow: false,
-  backgroundColor: '#000000',
-  backgroundOpacity: 60,
-  paddingX: 20,
-  paddingY: 20,
-  borderRadius: 12
-};
-
-interface Template {
-  id: string;
-  name: string;
-  description: string;
-  settings: StampSettings;
-  isCustom?: boolean;
-}
-
-const PRESET_TEMPLATES: Template[] = [
-  {
-    id: 'industry',
-    name: 'Industry',
-    description: 'Professional, vertical bar',
-    settings: { 
-      ...DEFAULT_SETTINGS, 
-      templateStyle: TemplateStyle.INDUSTRY,
-      textPosition: TextPosition.BOTTOM_LEFT, 
-      borderRadius: 4, 
-      backgroundColor: '#000000', 
-      backgroundOpacity: 50, 
-      textColor: '#ffffff', 
-      textShadow: true,
-      timeFontSize: 48,
-      dateFontSize: 24,
-      locationFontSize: 18,
-      coordinatesFontSize: 16,
-      paddingX: 24,
-      paddingY: 24,
-      showCoordinates: true,
-      showMapOverlay: false
-    }
-  },
-  {
-    id: 'classic',
-    name: 'Classic Box',
-    description: 'Simple rounded box',
-    settings: { 
-      ...DEFAULT_SETTINGS, 
-      templateStyle: TemplateStyle.SIMPLE,
-      textPosition: TextPosition.BOTTOM_RIGHT, 
-      borderRadius: 12, 
-      backgroundColor: '#000000', 
-      backgroundOpacity: 60, 
-      textColor: '#ffffff', 
-      textShadow: false,
-      timeFontSize: 24,
-      dateFontSize: 24,
-      locationFontSize: 24,
-      coordinatesFontSize: 18,
-      showMapOverlay: false
-    }
-  },
-  {
-    id: 'modern',
-    name: 'Modern Clean',
-    description: 'White minimalist',
-    settings: { 
-      ...DEFAULT_SETTINGS, 
-      templateStyle: TemplateStyle.MODERN,
-      textPosition: TextPosition.BOTTOM_CENTER, 
-      borderRadius: 8, 
-      backgroundColor: '#ffffff', 
-      backgroundOpacity: 90, 
-      textColor: '#0f172a', 
-      textShadow: false,
-      timeFontSize: 22,
-      dateFontSize: 22,
-      locationFontSize: 22,
-      coordinatesFontSize: 18,
-      showMapOverlay: false
-    }
-  },
-  {
-    id: 'retro',
-    name: 'Retro Cam',
-    description: 'Old digital camera style',
-    settings: { 
-      ...DEFAULT_SETTINGS, 
-      templateStyle: TemplateStyle.RETRO,
-      textPosition: TextPosition.BOTTOM_RIGHT, 
-      borderRadius: 0, 
-      backgroundColor: '#000000', 
-      backgroundOpacity: 0, 
-      textColor: '#F97316', 
-      textShadow: true,
-      timeFontSize: 28,
-      dateFontSize: 28,
-      locationFontSize: 28,
-      coordinatesFontSize: 28,
-      showMapOverlay: false
-    }
-  }
-];
-
-// Helper to convert decimal deg to DMS for EXIF
 const toDMS = (deg: number) => {
   const absolute = Math.abs(deg);
   const degrees = Math.floor(absolute);
   const minutes = Math.floor((absolute - degrees) * 60);
   const seconds = (absolute - degrees - minutes / 60) * 3600;
-  return [[degrees, 1], [minutes, 1], [Math.round(seconds * 100), 100]];
+  return [
+    [degrees, 1],
+    [minutes, 1],
+    [Math.round(seconds * 100), 100],
+  ];
 };
 
-const MapPickerModal = ({ isOpen, onClose, onSelect }: { isOpen: boolean; onClose: () => void; onSelect: (lat: number, lng: number) => void }) => {
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const markerRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (!isOpen || !mapContainerRef.current) return;
-
-    if (!mapInstanceRef.current) {
-      // Init map
-      const map = L.map(mapContainerRef.current).setView([-6.2088, 106.8456], 13);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors'
-      }).addTo(map);
-      
-      map.on('click', (e: any) => {
-        const { lat, lng } = e.latlng;
-        if (markerRef.current) {
-           markerRef.current.setLatLng([lat, lng]);
-        } else {
-           markerRef.current = L.marker([lat, lng]).addTo(map);
-        }
-        onSelect(lat, lng);
-      });
-
-      // Try to get user location
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                const { latitude, longitude } = pos.coords;
-                map.setView([latitude, longitude], 15);
-                if (markerRef.current) markerRef.current.setLatLng([latitude, longitude]);
-                else markerRef.current = L.marker([latitude, longitude]).addTo(map);
-                onSelect(latitude, longitude);
-            },
-            () => console.log('Location access denied')
-        );
-      }
-      
-      mapInstanceRef.current = map;
-    } else {
-      // Invalidate size to ensure tiles render correctly if modal was hidden
-      setTimeout(() => {
-         mapInstanceRef.current.invalidateSize();
-      }, 100);
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="bg-slate-800 rounded-xl w-full max-w-2xl h-[500px] flex flex-col shadow-2xl border border-slate-700">
-        <div className="flex justify-between items-center p-4 border-b border-slate-700">
-          <h3 className="text-lg font-bold text-white flex items-center gap-2">
-            <MapIcon size={20} className="text-blue-400"/> Pick Location
-          </h3>
-          <button onClick={onClose} className="p-1 hover:bg-slate-700 rounded-full transition-colors">
-            <X size={24} className="text-slate-400" />
-          </button>
-        </div>
-        <div className="flex-1 relative bg-slate-900">
-          <div ref={mapContainerRef} className="absolute inset-0 z-0"></div>
-           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] bg-slate-800/90 px-4 py-2 rounded-lg text-xs text-slate-300 pointer-events-none backdrop-blur shadow-lg border border-slate-700">
-            Click on the map to set coordinates
-          </div>
-        </div>
-        <div className="p-4 border-t border-slate-700 flex justify-end">
-           <Button onClick={onClose}>Confirm Location</Button>
-        </div>
-      </div>
-    </div>
-  );
+const getNowIsoLocal = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
-const SaveTemplateModal = ({ isOpen, onClose, onSave }: { isOpen: boolean; onClose: () => void; onSave: (name: string) => void }) => {
-  const [name, setName] = useState('');
+const DEFAULT_SETTINGS: StampSettings = {
+  templateStyle: TemplateStyle.GPS_SURVEY,
+  textPosition: TextPosition.BOTTOM_LEFT,
 
-  if (!isOpen) return null;
+  // Date & Time
+  showDate: true,
+  showTime: true,
+  showSeconds: true,
+  showTimezone: true,
+  timezoneLabel: 'WIB',
+  customDate: getNowIsoLocal(),
+  dateFormat: DateFormat.FULL_ID,
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="bg-slate-800 rounded-xl w-full max-w-md p-6 shadow-2xl border border-slate-700 space-y-4">
-        <div className="flex justify-between items-center">
-          <h3 className="text-lg font-bold text-white">Save Template</h3>
-          <button onClick={onClose} className="p-1 hover:bg-slate-700 rounded-full transition-colors">
-            <X size={20} className="text-slate-400" />
-          </button>
-        </div>
-        <div>
-          <label className="text-sm text-slate-400 block mb-1">Template Name</label>
-          <input 
-            type="text" 
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="My Custom Style"
-            className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-blue-500 text-white"
-            autoFocus
-          />
-        </div>
-        <div className="flex justify-end pt-2">
-           <Button onClick={() => onSave(name)} disabled={!name.trim()}>Save Template</Button>
-        </div>
-      </div>
-    </div>
-  );
+  // Location
+  showLocation: true,
+  customLocation: 'Jakarta Pusat, DKI Jakarta',
+  showCoordinates: true,
+  customCoordinates: '-6.2088, 106.8456',
+  coordFormat: 'decimal',
+  showAltitude: true,
+  altitude: '18 m ASL',
+  showWeather: true,
+  weather: '31°C Cerah',
+
+  // Project & Notes
+  showProjectName: true,
+  projectName: 'Dokumentasi Lapangan',
+  showNotes: true,
+  notes: 'Verifikasi fisik & koordinat',
+  showSurveyor: false,
+  surveyorName: '',
+
+  // Map
+  showMapOverlay: true,
+  mapZoom: 15,
+  mapShape: 'rounded',
+
+  // Logo
+  showLogo: false,
+  logoSrc: null,
+  logoPosition: 'stamp_right',
+
+  // Typography
+  baseFontSize: 18,
+  timeFontSize: 24,
+  dateFontSize: 20,
+  locationFontSize: 18,
+  coordinatesFontSize: 16,
+  notesFontSize: 16,
+
+  // Appearance
+  textColor: '#ffffff',
+  accentColor: '#f59e0b',
+  textShadow: true,
+  backgroundColor: '#090d16',
+  backgroundOpacity: 75,
+  paddingX: 20,
+  paddingY: 18,
+  borderRadius: 12,
+
+  // Image Transformations
+  rotation: 0,
+  flipHorizontal: false,
+  brightness: 100,
+  contrast: 100,
+  saturation: 100,
 };
+
+const PRESET_TEMPLATES: TemplatePreset[] = [
+  {
+    id: 'gps_survey_pro',
+    name: 'GPS Survey Pro',
+    description: 'Standar GPS Map Camera dengan data lengkap & peta mini',
+    badge: 'Populer',
+    settings: {
+      templateStyle: TemplateStyle.GPS_SURVEY,
+      textPosition: TextPosition.BOTTOM_LEFT,
+      backgroundColor: '#090d16',
+      backgroundOpacity: 80,
+      textColor: '#ffffff',
+      accentColor: '#f59e0b',
+      textShadow: true,
+      showMapOverlay: true,
+      showCoordinates: true,
+      showAltitude: true,
+      showWeather: true,
+      showProjectName: true,
+      showNotes: true,
+      timeFontSize: 26,
+      dateFontSize: 20,
+      locationFontSize: 18,
+      coordinatesFontSize: 16,
+      borderRadius: 12,
+    },
+  },
+  {
+    id: 'industry_bar',
+    name: 'Industry Bar',
+    description: 'Aksen garis vertikal oranye profesional',
+    settings: {
+      templateStyle: TemplateStyle.INDUSTRY,
+      textPosition: TextPosition.BOTTOM_LEFT,
+      backgroundColor: '#000000',
+      backgroundOpacity: 65,
+      textColor: '#ffffff',
+      accentColor: '#f97316',
+      textShadow: true,
+      showMapOverlay: false,
+      timeFontSize: 36,
+      dateFontSize: 22,
+      locationFontSize: 18,
+      coordinatesFontSize: 16,
+      borderRadius: 4,
+    },
+  },
+  {
+    id: 'classic_box',
+    name: 'Classic Box',
+    description: 'Kotak hitam rounded elegan & kontras',
+    settings: {
+      templateStyle: TemplateStyle.SIMPLE,
+      textPosition: TextPosition.BOTTOM_RIGHT,
+      backgroundColor: '#000000',
+      backgroundOpacity: 70,
+      textColor: '#ffffff',
+      accentColor: '#38bdf8',
+      textShadow: false,
+      showMapOverlay: false,
+      timeFontSize: 24,
+      dateFontSize: 20,
+      locationFontSize: 18,
+      coordinatesFontSize: 16,
+      borderRadius: 12,
+    },
+  },
+  {
+    id: 'modern_clean',
+    name: 'Modern Clean',
+    description: 'Latar putih minimalis dengan ikon bersih',
+    settings: {
+      templateStyle: TemplateStyle.MODERN,
+      textPosition: TextPosition.BOTTOM_CENTER,
+      backgroundColor: '#ffffff',
+      backgroundOpacity: 92,
+      textColor: '#0f172a',
+      accentColor: '#0284c7',
+      textShadow: false,
+      showMapOverlay: false,
+      timeFontSize: 22,
+      dateFontSize: 18,
+      locationFontSize: 18,
+      coordinatesFontSize: 16,
+      borderRadius: 8,
+    },
+  },
+  {
+    id: 'retro_digicam',
+    name: 'Retro Digicam',
+    description: 'Format digital LED oranye kamera 90-an',
+    badge: 'Vintage',
+    settings: {
+      templateStyle: TemplateStyle.RETRO,
+      textPosition: TextPosition.BOTTOM_RIGHT,
+      backgroundColor: '#000000',
+      backgroundOpacity: 0,
+      textColor: '#f97316',
+      accentColor: '#f97316',
+      textShadow: true,
+      showMapOverlay: false,
+      showCoordinates: true,
+      timeFontSize: 28,
+      dateFontSize: 26,
+      locationFontSize: 22,
+      coordinatesFontSize: 20,
+      borderRadius: 0,
+    },
+  },
+  {
+    id: 'full_banner',
+    name: 'Full Banner',
+    description: 'Banner bawah penuh untuk laporan resmi dinas/proyek',
+    settings: {
+      templateStyle: TemplateStyle.BOTTOM_BANNER,
+      textPosition: TextPosition.BOTTOM_CENTER,
+      backgroundColor: '#090d16',
+      backgroundOpacity: 85,
+      textColor: '#ffffff',
+      accentColor: '#38bdf8',
+      showMapOverlay: true,
+      showCoordinates: true,
+      showProjectName: true,
+      timeFontSize: 22,
+      dateFontSize: 18,
+      locationFontSize: 16,
+      coordinatesFontSize: 15,
+      borderRadius: 0,
+    },
+  },
+  {
+    id: 'minimal_ghost',
+    name: 'Minimal Ghost',
+    description: 'Hanya teks dengan bayangan tajam tanpa background',
+    settings: {
+      templateStyle: TemplateStyle.MINIMAL,
+      textPosition: TextPosition.BOTTOM_RIGHT,
+      backgroundColor: '#000000',
+      backgroundOpacity: 0,
+      textColor: '#ffffff',
+      accentColor: '#ffffff',
+      textShadow: true,
+      showMapOverlay: false,
+      timeFontSize: 26,
+      dateFontSize: 22,
+      locationFontSize: 18,
+      coordinatesFontSize: 16,
+    },
+  },
+];
 
 export default function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [settings, setSettings] = useState<StampSettings>(DEFAULT_SETTINGS);
-  const [customTemplates, setCustomTemplates] = useState<Template[]>([]);
+  const [customTemplates, setCustomTemplates] = useState<TemplatePreset[]>([]);
+
+  // Modals & UI States
+  const [activeTab, setActiveTab] = useState<'location' | 'time' | 'project' | 'style' | 'image' | 'ai'>('location');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isMapOpen, setIsMapOpen] = useState(false);
-  const [isSaveTemplateOpen, setIsSaveTemplateOpen] = useState(false);
-  
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState('');
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Persistence Logic (Database Config / Migrations)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  };
+
+  // Load Saved Templates and Previous Settings
   useEffect(() => {
-    // 1. Load Custom Templates
     try {
-      const savedTemplates = localStorage.getItem('mkd_custom_templates');
+      const savedTemplates = localStorage.getItem('mkd_custom_templates_v2');
       if (savedTemplates) {
         setCustomTemplates(JSON.parse(savedTemplates));
       }
+      const savedSettings = localStorage.getItem('mkd_settings_v2');
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        setSettings((prev) => ({ ...prev, ...parsed }));
+      }
     } catch (e) {
-      console.error("Failed to load templates", e);
-    }
-
-    // 2. Load Last Active Configuration (Config Migration)
-    try {
-        const savedSettings = localStorage.getItem('mkd_settings_v1');
-        if (savedSettings) {
-            const parsed = JSON.parse(savedSettings);
-            // Migration: Merge saved settings into defaults to ensure new fields are present
-            // We exclude content-specific fields like customDate if we want purely config, 
-            // but for a smooth UX we reload everything.
-            setSettings(prev => ({ ...prev, ...parsed }));
-        }
-    } catch (e) {
-        console.error("Failed to load settings config", e);
+      console.warn('Could not load preferences', e);
     }
   }, []);
 
-  // Save Settings on Change
+  // Save Settings to LocalStorage
   useEffect(() => {
-    localStorage.setItem('mkd_settings_v1', JSON.stringify(settings));
+    try {
+      localStorage.setItem('mkd_settings_v2', JSON.stringify(settings));
+    } catch (e) {
+      // ignore
+    }
   }, [settings]);
+
+  const updateSetting = <K extends keyof StampSettings>(key: K, value: StampSettings[K]) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
       const reader = new FileReader();
+
       reader.onload = (event) => {
         if (event.target?.result) {
           setImageSrc(event.target.result as string);
-          // Reset location data on new image
-          setSettings(prev => ({
-            ...prev,
-            customLocation: '',
-            customCoordinates: ''
-          }));
+          showToast('Foto berhasil dimuat!');
+
+          // If photo has lastModified date, suggest using it
+          if (file.lastModified) {
+            const fileDate = new Date(file.lastModified);
+            const iso = `${fileDate.getFullYear()}-${String(fileDate.getMonth() + 1).padStart(2, '0')}-${String(
+              fileDate.getDate()
+            ).padStart(2, '0')}T${String(fileDate.getHours()).padStart(2, '0')}:${String(
+              fileDate.getMinutes()
+            ).padStart(2, '0')}`;
+            // Optional auto update date to file's date
+            updateSetting('customDate', iso);
+          }
         }
       };
-      reader.readAsDataURL(e.target.files[0]);
+      reader.readAsDataURL(file);
     }
   };
 
-  const handleAIAnalysis = async () => {
+  const handleCameraCapture = (dataUrl: string) => {
+    setImageSrc(dataUrl);
+    updateSetting('customDate', getNowIsoLocal());
+    showToast('Foto berhasil diambil dari kamera!');
+  };
+
+  const handleGetDeviceLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Perangkat Anda tidak mendukung fitur geolokasi.');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude, altitude } = pos.coords;
+        const coordsStr = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+        updateSetting('customCoordinates', coordsStr);
+
+        if (altitude) {
+          updateSetting('altitude', `${Math.round(altitude)} m ASL`);
+        }
+
+        // Reverse geocode via server
+        try {
+          const res = await fetch(`/api/geocode/reverse?lat=${latitude}&lng=${longitude}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.display_name) {
+              updateSetting('customLocation', data.display_name);
+            }
+          }
+        } catch (e) {
+          console.warn('Geocode fetch failed', e);
+        }
+
+        showToast('Lokasi GPS & koordinat berhasil diperbarui!');
+      },
+      (err) => {
+        console.warn('GPS Error', err);
+        alert('Gagal mengambil lokasi GPS. Pastikan izin GPS aktif.');
+      },
+      { enableHighAccuracy: true }
+    );
+  };
+
+  const handleLocationSelectFromMap = (lat: number, lng: number, address?: string) => {
+    updateSetting('customCoordinates', `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+    if (address) {
+      updateSetting('customLocation', address);
+    }
+    showToast('Koordinat peta berhasil diperbarui!');
+  };
+
+  const handleGeminiAnalysis = async () => {
     if (!imageSrc) return;
     setIsAnalyzing(true);
     try {
       const metadata = await analyzeImageForMetadata(imageSrc);
-      setSettings(prev => ({
-        ...prev,
-        customLocation: metadata.location || prev.customLocation,
-        customDate: metadata.dateTime || prev.customDate,
-        customCoordinates: metadata.coordinates || prev.customCoordinates,
-        showLocation: !!metadata.location,
-        showCoordinates: !!metadata.coordinates
-      }));
-    } catch (error) {
-      console.error("Analysis failed", error);
-      alert("AI Analysis could not extract data. Please try again or enter manually.");
+
+      if (metadata.location) {
+        updateSetting('customLocation', metadata.location);
+      }
+      if (metadata.coordinates) {
+        updateSetting('customCoordinates', metadata.coordinates);
+      }
+      if (metadata.weather) {
+        updateSetting('weather', metadata.weather);
+      }
+      if (metadata.description) {
+        updateSetting('notes', metadata.description);
+      }
+      if (metadata.dateTime) {
+        updateSetting('customDate', metadata.dateTime.slice(0, 16));
+      }
+
+      showToast('Analisis Gemini AI selesai! Metadata otomatis terisi.');
+    } catch (err: any) {
+      console.error('Gemini analysis failed', err);
+      alert('Analisis Gemini AI tidak dapat memproses gambar saat ini: ' + (err.message || ''));
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  const handleDownload = async () => {
-    if (canvasRef.current) {
-      const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.95);
-      
-      try {
-        // Prepare EXIF data
-        const dateObj = new Date(settings.customDate);
-        const exifDate = !isNaN(dateObj.getTime()) 
-          ? dateObj.toISOString().replace(/[-T:]/g, ':').slice(0, 19).replace('::', ' ') // Format: "YYYY:MM:DD HH:MM:SS"
-          : "";
+  const handleDownload = () => {
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
 
-        const exifObj = {
-          "0th": {},
-          "Exif": {},
-          "GPS": {},
+    try {
+      if (typeof piexif !== 'undefined') {
+        const dateObj = new Date(settings.customDate);
+        const exifDate = !isNaN(dateObj.getTime())
+          ? dateObj
+              .toISOString()
+              .replace(/[-T:]/g, ':')
+              .slice(0, 19)
+              .replace('::', ' ')
+          : '';
+
+        const exifObj: any = {
+          '0th': {},
+          Exif: {},
+          GPS: {},
         };
 
-        // EXIF: Clean Software Tag
-        exifObj["0th"][piexif.ImageIFD.Software] = "Camera"; // Neutral value
+        exifObj['0th'][piexif.ImageIFD.Software] = 'MKD-Timestamp AI Studio';
 
         if (exifDate) {
-           exifObj["0th"][piexif.ImageIFD.DateTime] = exifDate;
-           exifObj["Exif"][piexif.ExifIFD.DateTimeOriginal] = exifDate;
-           exifObj["Exif"][piexif.ExifIFD.DateTimeDigitized] = exifDate;
+          exifObj['0th'][piexif.ImageIFD.DateTime] = exifDate;
+          exifObj.Exif[piexif.ExifIFD.DateTimeOriginal] = exifDate;
+          exifObj.Exif[piexif.ExifIFD.DateTimeDigitized] = exifDate;
         }
 
-        // Add GPS if coordinates present
         if (settings.showCoordinates && settings.customCoordinates) {
-          const parts = settings.customCoordinates.split(',').map(s => parseFloat(s.trim()));
+          const parts = settings.customCoordinates.split(',').map((s) => parseFloat(s.trim()));
           if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-             const lat = parts[0];
-             const lng = parts[1];
-             
-             exifObj["GPS"][piexif.GPSIFD.GPSLatitudeRef] = lat < 0 ? 'S' : 'N';
-             exifObj["GPS"][piexif.GPSIFD.GPSLatitude] = toDMS(lat);
-             exifObj["GPS"][piexif.GPSIFD.GPSLongitudeRef] = lng < 0 ? 'W' : 'E';
-             exifObj["GPS"][piexif.GPSIFD.GPSLongitude] = toDMS(lng);
+            const [lat, lng] = parts;
+            exifObj.GPS[piexif.GPSIFD.GPSLatitudeRef] = lat < 0 ? 'S' : 'N';
+            exifObj.GPS[piexif.GPSIFD.GPSLatitude] = toDMS(lat);
+            exifObj.GPS[piexif.GPSIFD.GPSLongitudeRef] = lng < 0 ? 'W' : 'E';
+            exifObj.GPS[piexif.GPSIFD.GPSLongitude] = toDMS(lng);
           }
         }
 
@@ -372,562 +486,1069 @@ export default function App() {
         const newJpeg = piexif.insert(exifBytes, dataUrl);
 
         const link = document.createElement('a');
-        link.download = `mkd_timestamp_${Date.now()}.jpg`;
+        link.download = `MKD_Timestamp_${Date.now()}.jpg`;
         link.href = newJpeg;
         link.click();
-
-      } catch (e) {
-        console.error("EXIF Error:", e);
-        // Fallback to normal download if EXIF fails
-        const link = document.createElement('a');
-        link.download = `mkd_timestamp_${Date.now()}.jpg`;
-        link.href = dataUrl;
-        link.click();
+        showToast('Foto tersimpan dengan metadata EXIF lengkap!');
+        return;
       }
+    } catch (e) {
+      console.warn('EXIF injection failed, falling back to standard download', e);
     }
+
+    const link = document.createElement('a');
+    link.download = `MKD_Timestamp_${Date.now()}.jpg`;
+    link.href = dataUrl;
+    link.click();
+    showToast('Foto berhasil diunduh!');
   };
 
   const handleShare = async () => {
     if (!canvasRef.current) return;
     try {
-      const blob = await new Promise<Blob | null>(resolve => 
+      const blob = await new Promise<Blob | null>((resolve) =>
         canvasRef.current!.toBlob(resolve, 'image/jpeg', 0.95)
       );
       if (!blob) return;
-      const file = new File([blob], 'geostamp.jpg', { type: 'image/jpeg' });
-      if (navigator.share && navigator.canShare({ files: [file] })) {
+
+      const file = new File([blob], `mkd_timestamp_${Date.now()}.jpg`, { type: 'image/jpeg' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: 'My GeoStamp Photo',
-          text: 'Check out this photo I customized with GeoStamp AI!',
+          title: 'MKD Timestamp Photo',
+          text: `Dokumentasi foto dengan timestamp & lokasi: ${settings.customLocation}`,
         });
       } else {
-        alert("Native sharing is not supported on this device. Please use the 'Save to Gallery' button.");
+        // Fallback copy to clipboard
+        if (navigator.clipboard && (window as any).ClipboardItem) {
+          await navigator.clipboard.write([
+            new (window as any).ClipboardItem({ 'image/jpeg': blob }),
+          ]);
+          showToast('Gambar disalin ke clipboard!');
+        } else {
+          showToast('Fitur share tidak didukung pada browser ini. Silakan gunakan tombol Unduh.');
+        }
       }
-    } catch (error) {
-      console.error("Error sharing:", error);
+    } catch (err) {
+      console.warn('Share error', err);
     }
   };
 
-  const applyTemplate = (templateSettings: StampSettings) => {
-    setSettings(prev => ({
-      ...templateSettings,
-      showDate: prev.showDate,
-      customDate: prev.customDate,
-      showLocation: prev.showLocation,
-      customLocation: prev.customLocation,
-      showCoordinates: prev.showCoordinates,
-      customCoordinates: prev.customCoordinates
-    }));
+  const handleRotate = () => {
+    const nextRotation = (settings.rotation + 90) % 360;
+    updateSetting('rotation', nextRotation);
   };
 
-  const handleSaveTemplate = (name: string) => {
-    const newTemplate: Template = {
+  const applyTemplate = (preset: Partial<StampSettings>) => {
+    setSettings((prev) => ({
+      ...prev,
+      ...preset,
+      // Retain personal text inputs
+      customLocation: prev.customLocation,
+      customCoordinates: prev.customCoordinates,
+      customDate: prev.customDate,
+      projectName: prev.projectName,
+      notes: prev.notes,
+    }));
+    showToast(`Template diterapkan!`);
+  };
+
+  const handleSaveCustomTemplate = () => {
+    if (!saveTemplateName.trim()) return;
+    const newTemplate: TemplatePreset = {
       id: `custom_${Date.now()}`,
-      name,
-      description: 'Custom saved style',
+      name: saveTemplateName.trim(),
+      description: 'Template kustom pengguna',
+      badge: 'Kustom',
+      isCustom: true,
       settings: { ...settings },
-      isCustom: true
     };
-    const updated = [newTemplate, ...customTemplates]; // Add to top
+
+    const updated = [newTemplate, ...customTemplates];
     setCustomTemplates(updated);
-    localStorage.setItem('mkd_custom_templates', JSON.stringify(updated));
-    setIsSaveTemplateOpen(false);
+    try {
+      localStorage.setItem('mkd_custom_templates_v2', JSON.stringify(updated));
+    } catch (e) {}
+
+    setSaveTemplateName('');
+    setIsSaveModalOpen(false);
+    showToast('Template berhasil disimpan!');
   };
 
   const handleDeleteTemplate = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if(window.confirm('Are you sure you want to delete this template?')) {
-      const updated = customTemplates.filter(t => t.id !== id);
-      setCustomTemplates(updated);
-      localStorage.setItem('mkd_custom_templates', JSON.stringify(updated));
-    }
+    const updated = customTemplates.filter((t) => t.id !== id);
+    setCustomTemplates(updated);
+    try {
+      localStorage.setItem('mkd_custom_templates_v2', JSON.stringify(updated));
+    } catch (e) {}
+    showToast('Template dihapus.');
   };
 
   const handleCanvasReady = useCallback((canvas: HTMLCanvasElement) => {
     canvasRef.current = canvas;
   }, []);
 
-  const updateSetting = <K extends keyof StampSettings>(key: K, value: StampSettings[K]) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
-  };
-
-  const handleLocationSelect = async (lat: number, lng: number) => {
-      const coords = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-      updateSetting('customCoordinates', coords);
-      
-      // Attempt reverse geocode using generic OSM API (Free, rate limited)
-      try {
-          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
-          const data = await res.json();
-          const city = data.address.city || data.address.town || data.address.village || data.address.county || "";
-          const country = data.address.country || "";
-          if (city) {
-              updateSetting('customLocation', `${city}, ${country}`);
-          }
-      } catch (e) {
-          console.warn("Could not reverse geocode");
-      }
-  };
-
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col md:flex-row">
-      <MapPickerModal 
-        isOpen={isMapOpen} 
-        onClose={() => setIsMapOpen(false)} 
-        onSelect={handleLocationSelect} 
-      />
-      <SaveTemplateModal 
-        isOpen={isSaveTemplateOpen}
-        onClose={() => setIsSaveTemplateOpen(false)}
-        onSave={handleSaveTemplate}
-      />
-
-      {/* Sidebar */}
-      <aside className="w-full md:w-[420px] bg-slate-800 border-r border-slate-700 flex flex-col h-screen overflow-hidden">
-        <div className="p-6 border-b border-slate-700 bg-slate-800 z-10">
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent mb-2">
-            MKD-Timestamp
-          </h1>
-          <p className="text-xs text-slate-400">Professional Photo Metadata & Stamping</p>
+    <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-slate-100 font-sans">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 bg-slate-800/95 text-white border border-slate-700 px-4 py-2.5 rounded-xl shadow-2xl backdrop-blur-md animate-fade-in text-sm font-medium">
+          <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
         </div>
+      )}
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-          {/* Upload */}
-          <div className="space-y-4">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-              <Upload size={16} /> Source
-            </h2>
-            <div className="flex gap-2">
-              <label className="flex-1 cursor-pointer">
-                <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
-                <div className="border-2 border-dashed border-slate-600 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-slate-750 transition-colors">
-                   <span className="text-sm font-medium text-slate-300">Choose Photo</span>
-                </div>
-              </label>
-              {imageSrc && (
-                <Button 
-                  onClick={handleAIAnalysis} 
-                  isLoading={isAnalyzing} 
-                  variant="secondary"
-                  className="px-3"
-                  title="Auto-detect location & time"
-                >
-                  <Wand2 size={18} />
-                </Button>
-              )}
+      {/* Map Picker Modal */}
+      <MapPickerModal
+        isOpen={isMapOpen}
+        onClose={() => setIsMapOpen(false)}
+        onSelect={handleLocationSelectFromMap}
+        initialLat={
+          settings.customCoordinates
+            ? parseFloat(settings.customCoordinates.split(',')[0]) || -6.2088
+            : -6.2088
+        }
+        initialLng={
+          settings.customCoordinates
+            ? parseFloat(settings.customCoordinates.split(',')[1]) || 106.8456
+            : 106.8456
+        }
+      />
+
+      {/* Camera Modal */}
+      <CameraModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onCapture={handleCameraCapture}
+      />
+
+      {/* Save Template Modal */}
+      {isSaveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-white text-base">Simpan Template Saat Ini</h3>
+              <button
+                onClick={() => setIsSaveModalOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X size={18} />
+              </button>
             </div>
-          </div>
-
-          {/* Templates */}
-          <div className="space-y-4">
-             <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                  <LayoutTemplate size={16} /> Templates
-                </h2>
-                <button 
-                  onClick={() => setIsSaveTemplateOpen(true)}
-                  className="text-xs flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors"
-                  title="Save current settings as template"
-                >
-                  <Save size={14} /> Save Current
-                </button>
-             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {[...customTemplates, ...PRESET_TEMPLATES].map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => applyTemplate(t.settings)}
-                  className={`flex flex-col items-center p-3 rounded-lg border transition-all text-left group relative overflow-hidden ${
-                      settings.templateStyle === t.settings.templateStyle && 
-                      settings.backgroundColor === t.settings.backgroundColor &&
-                      settings.textPosition === t.settings.textPosition &&
-                      !t.isCustom // Crude check to differentiate slightly if duplicate styles
-                      ? 'border-blue-500 bg-slate-750 ring-1 ring-blue-500/50' 
-                      : 'border-slate-700 bg-slate-750 hover:bg-slate-700 hover:border-blue-400'
-                  }`}
-                >
-                  {t.isCustom && (
-                    <div 
-                      onClick={(e) => handleDeleteTemplate(t.id, e)}
-                      className="absolute top-2 right-2 p-1.5 bg-slate-800/80 rounded-full text-slate-400 hover:text-red-400 hover:bg-slate-900 z-10 transition-all opacity-0 group-hover:opacity-100"
-                      title="Delete Template"
-                    >
-                      <Trash2 size={12} />
-                    </div>
-                  )}
-                  <div 
-                    className="w-full h-12 mb-2 rounded flex items-center justify-center text-[10px] font-bold shadow-sm relative overflow-hidden"
-                    style={{ 
-                      backgroundColor: '#334155' 
-                    }}
-                  >
-                     <div 
-                        className={`absolute px-2 py-1 rounded flex items-center gap-1
-                            ${t.settings.textPosition.includes('Left') ? 'left-1' : ''}
-                            ${t.settings.textPosition.includes('Right') ? 'right-1' : ''}
-                            ${t.settings.textPosition.includes('Center') ? 'left-1/2 -translate-x-1/2' : ''}
-                            ${t.settings.textPosition.includes('Top') ? 'top-1' : 'bottom-1'}
-                        `}
-                        style={{
-                           backgroundColor: t.settings.backgroundOpacity === 0 ? 'transparent' : t.settings.backgroundColor,
-                           opacity: t.settings.backgroundOpacity === 0 ? 1 : t.settings.backgroundOpacity/100,
-                           color: t.settings.textColor
-                        }}
-                     >
-                       {t.settings.templateStyle === TemplateStyle.INDUSTRY && (
-                         <div className="w-1 h-3 bg-amber-400 mr-1"></div>
-                       )}
-                       <span style={{ textShadow: t.settings.textShadow ? '1px 1px 1px rgba(0,0,0,0.8)' : 'none' }}>
-                         ABC
-                       </span>
-                     </div>
-                  </div>
-                  <div className="w-full">
-                    <div className="text-xs font-medium text-slate-200 flex items-center gap-1">
-                      {t.name}
-                      {t.isCustom && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" title="Custom Template"></span>}
-                    </div>
-                    <div className="text-[10px] text-slate-500 truncate w-full">{t.description}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Content Settings */}
-          <div className="space-y-4">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-              <Type size={16} /> Content & Sizes
-            </h2>
-
-            {/* Date */}
-            <div className="space-y-3 bg-slate-750/50 p-3 rounded-lg border border-slate-700/50">
-              <div className="flex items-center justify-between">
-                <label className="flex items-center gap-2 text-sm">
-                  <input 
-                    type="checkbox" 
-                    checked={settings.showDate} 
-                    onChange={(e) => updateSetting('showDate', e.target.checked)}
-                    className="rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500"
-                  />
-                  <span>Show Date</span>
-                </label>
-                <Calendar size={14} className="text-slate-500" />
-              </div>
-              
-              {settings.showDate && (
-                <div className="space-y-3 pt-2 border-t border-slate-700/50">
-                  <input 
-                    type="datetime-local" 
-                    value={settings.customDate}
-                    onChange={(e) => updateSetting('customDate', e.target.value)}
-                    className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:border-blue-500"
-                  />
-                  <select 
-                    value={settings.dateFormat}
-                    onChange={(e) => updateSetting('dateFormat', e.target.value as DateFormat)}
-                    className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:border-blue-500"
-                  >
-                    <option value={DateFormat.LOCAL}>DD/MM/YYYY HH:MM</option>
-                    <option value={DateFormat.ISO}>ISO 8601</option>
-                    <option value={DateFormat.FULL}>Full Date</option>
-                  </select>
-                  
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-[10px] text-slate-400">Time Size</label>
-                          <span className="text-[10px] text-slate-500">{settings.timeFontSize}px</span>
-                        </div>
-                        <input 
-                            type="range" min="12" max="100" 
-                            value={settings.timeFontSize}
-                            onChange={(e) => updateSetting('timeFontSize', Number(e.target.value))}
-                            className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                    </div>
-                     <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-[10px] text-slate-400">Date Size</label>
-                          <span className="text-[10px] text-slate-500">{settings.dateFontSize}px</span>
-                        </div>
-                        <input 
-                            type="range" min="12" max="100" 
-                            value={settings.dateFontSize}
-                            onChange={(e) => updateSetting('dateFontSize', Number(e.target.value))}
-                            className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Location */}
-            <div className="space-y-3 bg-slate-750/50 p-3 rounded-lg border border-slate-700/50">
-              <div className="flex items-center justify-between">
-                <label className="flex items-center gap-2 text-sm">
-                  <input 
-                    type="checkbox" 
-                    checked={settings.showLocation} 
-                    onChange={(e) => updateSetting('showLocation', e.target.checked)}
-                    className="rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500"
-                  />
-                  <span>Show Location</span>
-                </label>
-                <MapPin size={14} className="text-slate-500" />
-              </div>
-              {settings.showLocation && (
-                <div className="space-y-3 pt-2 border-t border-slate-700/50">
-                    <input 
-                    type="text" 
-                    placeholder="e.g. Jakarta, Indonesia"
-                    value={settings.customLocation}
-                    onChange={(e) => updateSetting('customLocation', e.target.value)}
-                    className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:border-blue-500"
-                    />
-                    <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-[10px] text-slate-400">Location Size</label>
-                          <span className="text-[10px] text-slate-500">{settings.locationFontSize}px</span>
-                        </div>
-                        <input 
-                            type="range" min="12" max="100" 
-                            value={settings.locationFontSize}
-                            onChange={(e) => updateSetting('locationFontSize', Number(e.target.value))}
-                            className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                    </div>
-                </div>
-              )}
-            </div>
-
-            {/* Coordinates */}
-             <div className="space-y-3 bg-slate-750/50 p-3 rounded-lg border border-slate-700/50">
-              <div className="flex items-center justify-between">
-                <label className="flex items-center gap-2 text-sm">
-                  <input 
-                    type="checkbox" 
-                    checked={settings.showCoordinates} 
-                    onChange={(e) => updateSetting('showCoordinates', e.target.checked)}
-                    className="rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500"
-                  />
-                  <span>Show Coordinates</span>
-                </label>
-                <div className="text-[10px] font-mono text-slate-500">LAT,LNG</div>
-              </div>
-              {settings.showCoordinates && (
-                <div className="space-y-3 pt-2 border-t border-slate-700/50">
-                    <div className="flex gap-2">
-                        <input 
-                        type="text" 
-                        placeholder="-6.2088, 106.8456"
-                        value={settings.customCoordinates}
-                        onChange={(e) => updateSetting('customCoordinates', e.target.value)}
-                        className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:border-blue-500 font-mono"
-                        />
-                        <button 
-                            onClick={() => setIsMapOpen(true)}
-                            className="bg-blue-600 hover:bg-blue-500 p-2 rounded text-white"
-                            title="Pick from Map"
-                        >
-                            <MapIcon size={16} />
-                        </button>
-                    </div>
-                    
-                    <label className="flex items-center gap-2 text-xs py-1">
-                      <input 
-                        type="checkbox" 
-                        checked={settings.showMapOverlay} 
-                        onChange={(e) => updateSetting('showMapOverlay', e.target.checked)}
-                        className="rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500"
-                      />
-                      <span>Show Mini Map Overlay</span>
-                    </label>
-
-                    <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-[10px] text-slate-400">Coords Size</label>
-                          <span className="text-[10px] text-slate-500">{settings.coordinatesFontSize}px</span>
-                        </div>
-                        <input 
-                            type="range" min="12" max="100" 
-                            value={settings.coordinatesFontSize}
-                            onChange={(e) => updateSetting('coordinatesFontSize', Number(e.target.value))}
-                            className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                    </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Style Settings */}
-          <div className="space-y-4">
-             <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-              <Sliders size={16} /> Appearance
-            </h2>
-            
             <div>
-            <label className="text-xs text-slate-400 block mb-1">Position</label>
-            <select 
-                value={settings.textPosition}
-                onChange={(e) => updateSetting('textPosition', e.target.value as TextPosition)}
-                className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-blue-500"
-            >
-                {Object.values(TextPosition).map(pos => (
-                <option key={pos} value={pos}>{pos}</option>
-                ))}
-            </select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-               <div>
-                <label className="text-xs text-slate-400 block mb-1">Text Color</label>
-                <div className="flex gap-2">
-                  <input 
-                    type="color" 
-                    value={settings.textColor}
-                    onChange={(e) => updateSetting('textColor', e.target.value)}
-                    className="h-9 w-9 rounded bg-transparent cursor-pointer border border-slate-600 shrink-0"
-                  />
-                  <input 
-                    type="text"
-                    value={settings.textColor}
-                    onChange={(e) => updateSetting('textColor', e.target.value)}
-                    className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 text-sm w-full"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">Bg Color</label>
-                <div className="flex gap-2">
-                  <input 
-                    type="color" 
-                    value={settings.backgroundColor}
-                    onChange={(e) => updateSetting('backgroundColor', e.target.value)}
-                    className="h-9 w-9 rounded bg-transparent cursor-pointer border border-slate-600 shrink-0"
-                  />
-                   <input 
-                    type="text"
-                    value={settings.backgroundColor}
-                    onChange={(e) => updateSetting('backgroundColor', e.target.value)}
-                    className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 text-sm w-full"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="text-xs text-slate-400 block mb-1">Transparency</label>
-                <span className="text-xs text-slate-400">{settings.backgroundOpacity}%</span>
-              </div>
-              <input 
-                type="range" 
-                min="0" 
-                max="100" 
-                value={settings.backgroundOpacity}
-                onChange={(e) => updateSetting('backgroundOpacity', Number(e.target.value))}
-                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              <label className="text-xs text-slate-400 block mb-1">Nama Template</label>
+              <input
+                type="text"
+                placeholder="Misal: Survey Lapangan Proyek A"
+                value={saveTemplateName}
+                onChange={(e) => setSaveTemplateName(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                autoFocus
               />
             </div>
-            
-            <div className="p-3 bg-slate-750/50 rounded border border-slate-700/50">
-                <h3 className="text-xs font-semibold text-slate-400 mb-2">Background Box</h3>
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                    <div>
-                        <label className="text-[10px] text-slate-400 block mb-1">Pad Width (X)</label>
-                        <input 
-                        type="number" 
-                        value={settings.paddingX}
-                        onChange={(e) => updateSetting('paddingX', Number(e.target.value))}
-                        className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm w-full"
-                        />
-                    </div>
-                    <div>
-                        <label className="text-[10px] text-slate-400 block mb-1">Pad Height (Y)</label>
-                        <input 
-                        type="number" 
-                        value={settings.paddingY}
-                        onChange={(e) => updateSetting('paddingY', Number(e.target.value))}
-                        className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm w-full"
-                        />
-                    </div>
-                </div>
-                <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className="text-[10px] text-slate-400">Corner Radius</label>
-                      <span className="text-[10px] text-slate-500">{settings.borderRadius}px</span>
-                    </div>
-                    <input 
-                        type="range" min="0" max="50"
-                        value={settings.borderRadius}
-                        onChange={(e) => updateSetting('borderRadius', Number(e.target.value))}
-                        className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                    />
-                </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsSaveModalOpen(false)}
+              >
+                Batal
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSaveCustomTemplate}
+                disabled={!saveTemplateName.trim()}
+              >
+                Simpan
+              </Button>
             </div>
+          </div>
+        </div>
+      )}
 
-             <div className="flex items-center gap-2">
-                <input 
-                  type="checkbox" 
-                  checked={settings.textShadow} 
-                  onChange={(e) => updateSetting('textShadow', e.target.checked)}
-                  id="textShadow"
-                  className="rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500"
-                />
-                <label htmlFor="textShadow" className="text-sm">Text Drop Shadow</label>
-             </div>
+      {/* SIDEBAR CONTROLS */}
+      <aside className="w-full md:w-[460px] lg:w-[480px] bg-[#0c1322] border-r border-slate-800 flex flex-col h-full shrink-0 z-20">
+        {/* App Title & Quick Upload Bar */}
+        <div className="p-4 border-b border-slate-800/80 bg-[#0f172a]/90 backdrop-blur-sm flex justify-between items-center">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20 font-bold text-sm">
+                MK
+              </div>
+              <h1 className="text-base font-bold tracking-tight text-white">MKD-Timestamp</h1>
+              <span className="text-[10px] uppercase font-semibold tracking-wider bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 rounded">
+                v2.0
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Stempel Waktu & Lokasi GPS Foto Profesional
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setIsCameraOpen(true)}
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+              title="Ambil Foto Kamera Langsung"
+            >
+              <Camera size={16} />
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs flex items-center gap-1.5 transition-colors shadow-md shadow-blue-600/20"
+            >
+              <Upload size={14} /> Upload
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
+            />
           </div>
         </div>
 
-        {/* Action Footer */}
-        <div className="p-6 border-t border-slate-700 bg-slate-800 space-y-3">
-          <Button 
-            onClick={handleDownload} 
-            disabled={!imageSrc} 
+        {/* Tab Navigation */}
+        <div className="flex border-b border-slate-800 bg-[#0b101d] overflow-x-auto no-scrollbar px-2 py-1 gap-1">
+          {[
+            { id: 'location', label: 'Lokasi & GPS', icon: MapPin },
+            { id: 'time', label: 'Waktu & Jam', icon: Clock },
+            { id: 'project', label: 'Catatan Proyek', icon: FileText },
+            { id: 'style', label: 'Gaya & Template', icon: LayoutTemplate },
+            { id: 'image', label: 'Edit Foto', icon: Sliders },
+            { id: 'ai', label: 'AI Gemini', icon: Sparkles },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg whitespace-nowrap transition-all ${
+                  isActive
+                    ? 'bg-blue-600/15 text-blue-400 border border-blue-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                <Icon size={14} className={isActive ? 'text-blue-400' : 'text-slate-500'} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Tab Content Body */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
+          {/* TAB: LOKASI & GPS */}
+          {activeTab === 'location' && (
+            <div className="space-y-4">
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <MapPin size={14} className="text-blue-400" /> Nama Lokasi & Alamat
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showLocation}
+                      onChange={(e) => updateSetting('showLocation', e.target.checked)}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Tampilkan</span>
+                  </label>
+                </div>
+
+                {settings.showLocation && (
+                  <div className="space-y-2.5">
+                    <textarea
+                      rows={2}
+                      value={settings.customLocation}
+                      onChange={(e) => updateSetting('customLocation', e.target.value)}
+                      placeholder="Contoh: Jl. MH Thamrin No. 1, Jakarta Pusat"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500 leading-relaxed"
+                    />
+
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleGetDeviceLocation}
+                        icon={<Compass size={14} />}
+                        className="flex-1 text-[11px]"
+                      >
+                        GPS Perangkat
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setIsMapOpen(true)}
+                        icon={<MapIcon size={14} />}
+                        className="flex-1 text-[11px]"
+                      >
+                        Pilih di Peta
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Coordinates Section */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <Compass size={14} className="text-amber-400" /> Koordinat GPS
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showCoordinates}
+                      onChange={(e) => updateSetting('showCoordinates', e.target.checked)}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Tampilkan</span>
+                  </label>
+                </div>
+
+                {settings.showCoordinates && (
+                  <div className="space-y-2.5">
+                    <input
+                      type="text"
+                      value={settings.customCoordinates}
+                      onChange={(e) => updateSetting('customCoordinates', e.target.value)}
+                      placeholder="-6.208800, 106.845600"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none focus:border-blue-500"
+                    />
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-1">Format Koordinat</label>
+                        <select
+                          value={settings.coordFormat}
+                          onChange={(e) => updateSetting('coordFormat', e.target.value as any)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                        >
+                          <option value="decimal">Desimal (-6.2088° S, 106.8456° E)</option>
+                          <option value="dms">DMS (6°12'31" S, 106°50'44" E)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-1">Ketinggian / Elevasi</label>
+                        <input
+                          type="text"
+                          value={settings.altitude}
+                          onChange={(e) => updateSetting('altitude', e.target.value)}
+                          placeholder="45 m ASL"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Mini Map Overlay */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <MapIcon size={14} className="text-emerald-400" /> Mini Map Watermark
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showMapOverlay}
+                      onChange={(e) => updateSetting('showMapOverlay', e.target.checked)}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Aktif</span>
+                  </label>
+                </div>
+
+                {settings.showMapOverlay && (
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="text-[10px] text-slate-400 block mb-1">Bentuk Peta</label>
+                      <select
+                        value={settings.mapShape}
+                        onChange={(e) => updateSetting('mapShape', e.target.value as any)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                      >
+                        <option value="rounded">Kotak Membulat</option>
+                        <option value="circle">Lingkaran (Circle)</option>
+                        <option value="square">Persegi</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                        <span>Zoom Peta</span>
+                        <span>{settings.mapZoom || 15}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="12"
+                        max="18"
+                        value={settings.mapZoom || 15}
+                        onChange={(e) => updateSetting('mapZoom', Number(e.target.value))}
+                        className="w-full accent-blue-500 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Weather & Environment */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <Sun size={14} className="text-yellow-400" /> Cuaca / Kondisi Suhu
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showWeather}
+                      onChange={(e) => updateSetting('showWeather', e.target.checked)}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Tampilkan</span>
+                  </label>
+                </div>
+                {settings.showWeather && (
+                  <input
+                    type="text"
+                    value={settings.weather}
+                    onChange={(e) => updateSetting('weather', e.target.value)}
+                    placeholder="31°C Cerah Berawan"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200"
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: WAKTU & JAM */}
+          {activeTab === 'time' && (
+            <div className="space-y-4">
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <Calendar size={14} className="text-blue-400" /> Waktu Pengambilan Foto
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showDate || settings.showTime}
+                      onChange={(e) => {
+                        updateSetting('showDate', e.target.checked);
+                        updateSetting('showTime', e.target.checked);
+                      }}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Aktif</span>
+                  </label>
+                </div>
+
+                <div className="space-y-2.5">
+                  <input
+                    type="datetime-local"
+                    value={settings.customDate}
+                    onChange={(e) => updateSetting('customDate', e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none focus:border-blue-500"
+                  />
+
+                  {/* Preset Quick Buttons */}
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-[11px] py-1"
+                      onClick={() => updateSetting('customDate', getNowIsoLocal())}
+                    >
+                      Sekarang (Live)
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-[11px] py-1"
+                      onClick={() => {
+                        const d = new Date(settings.customDate);
+                        d.setHours(d.getHours() - 1);
+                        updateSetting('customDate', d.toISOString().slice(0, 16));
+                      }}
+                    >
+                      -1 Jam
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-[11px] py-1"
+                      onClick={() => {
+                        const d = new Date(settings.customDate);
+                        d.setDate(d.getDate() - 1);
+                        updateSetting('customDate', d.toISOString().slice(0, 16));
+                      }}
+                    >
+                      Kemarin
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Format Options */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <span className="text-xs font-semibold uppercase text-slate-300 block">
+                  Format Tanggal & Waktu
+                </span>
+
+                <div className="space-y-2">
+                  <select
+                    value={settings.dateFormat}
+                    onChange={(e) => updateSetting('dateFormat', e.target.value as DateFormat)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200"
+                  >
+                    <option value={DateFormat.FULL_ID}>Bahasa Indonesia (Kamis, 15 Oktober 2026)</option>
+                    <option value={DateFormat.LOCAL}>Standar Singkat (15/10/2026)</option>
+                    <option value={DateFormat.GPS_STANDARD}>Standar GPS (15-Okt-2026)</option>
+                    <option value={DateFormat.ISO}>ISO 8601 (2026-10-15)</option>
+                    <option value={DateFormat.RETRO}>Retro Digicam (10.15.'26)</option>
+                  </select>
+
+                  <div className="grid grid-cols-2 gap-2 pt-2">
+                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.showSeconds}
+                        onChange={(e) => updateSetting('showSeconds', e.target.checked)}
+                        className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                      />
+                      <span>Tampilkan Detik (:ss)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.showTimezone}
+                        onChange={(e) => updateSetting('showTimezone', e.target.checked)}
+                        className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                      />
+                      <span>Zona Waktu</span>
+                    </label>
+                  </div>
+
+                  {settings.showTimezone && (
+                    <div className="pt-2">
+                      <label className="text-[10px] text-slate-400 block mb-1">Pilihan Zona Waktu</label>
+                      <div className="flex gap-1.5">
+                        {['WIB', 'WITA', 'WIT', 'GMT+7', 'UTC'].map((tz) => (
+                          <button
+                            key={tz}
+                            onClick={() => updateSetting('timezoneLabel', tz)}
+                            className={`px-2.5 py-1 text-xs rounded font-mono ${
+                              settings.timezoneLabel === tz
+                                ? 'bg-blue-600 text-white font-bold'
+                                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            }`}
+                          >
+                            {tz}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: CATATAN PROYEK */}
+          {activeTab === 'project' && (
+            <div className="space-y-4">
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <FileText size={14} className="text-blue-400" /> Judul Proyek / Pekerjaan
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showProjectName}
+                      onChange={(e) => updateSetting('showProjectName', e.target.checked)}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Tampilkan</span>
+                  </label>
+                </div>
+                {settings.showProjectName && (
+                  <input
+                    type="text"
+                    value={settings.projectName}
+                    onChange={(e) => updateSetting('projectName', e.target.value)}
+                    placeholder="Contoh: Proyek Drainase Paket IV"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
+                  />
+                )}
+              </div>
+
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <Info size={14} className="text-amber-400" /> Catatan / Keterangan Lapangan
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showNotes}
+                      onChange={(e) => updateSetting('showNotes', e.target.checked)}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Tampilkan</span>
+                  </label>
+                </div>
+                {settings.showNotes && (
+                  <textarea
+                    rows={2}
+                    value={settings.notes}
+                    onChange={(e) => updateSetting('notes', e.target.value)}
+                    placeholder="Contoh: Kondisi fisik pekerjaan 85%, cuaca cerah"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100"
+                  />
+                )}
+              </div>
+
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <Eye size={14} className="text-emerald-400" /> Nama Petugas / Surveyor
+                  </span>
+                  <label className="flex items-center gap-1 text-xs cursor-pointer text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={settings.showSurveyor}
+                      onChange={(e) => updateSetting('showSurveyor', e.target.checked)}
+                      className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                    />
+                    <span>Tampilkan</span>
+                  </label>
+                </div>
+                {settings.showSurveyor && (
+                  <input
+                    type="text"
+                    value={settings.surveyorName}
+                    onChange={(e) => updateSetting('surveyorName', e.target.value)}
+                    placeholder="Nama Surveyor / Tim Pengawas"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: GAYA & TEMPLATE */}
+          {activeTab === 'style' && (
+            <div className="space-y-5">
+              {/* Template Presets Grid */}
+              <div className="space-y-2.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase text-slate-300 flex items-center gap-1.5">
+                    <LayoutTemplate size={14} className="text-blue-400" /> Pilihan Template
+                  </span>
+                  <button
+                    onClick={() => setIsSaveModalOpen(true)}
+                    className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                  >
+                    <Save size={13} /> Simpan Gaya Ini
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  {[...customTemplates, ...PRESET_TEMPLATES].map((preset) => {
+                    const isSelected = settings.templateStyle === preset.settings.templateStyle;
+                    return (
+                      <div
+                        key={preset.id}
+                        onClick={() => applyTemplate(preset.settings)}
+                        className={`p-3 rounded-xl border text-left cursor-pointer transition-all relative group ${
+                          isSelected
+                            ? 'border-blue-500 bg-blue-950/20 ring-1 ring-blue-500/50'
+                            : 'border-slate-800 bg-slate-800/40 hover:bg-slate-800/70 hover:border-slate-700'
+                        }`}
+                      >
+                        {preset.isCustom && (
+                          <button
+                            onClick={(e) => handleDeleteTemplate(preset.id, e)}
+                            className="absolute top-2 right-2 p-1 text-slate-500 hover:text-red-400 hover:bg-slate-700 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Hapus template kustom"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-semibold text-slate-200 truncate">
+                            {preset.name}
+                          </span>
+                          {preset.badge && (
+                            <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1 py-0.2 rounded font-semibold">
+                              {preset.badge}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-400 line-clamp-2 leading-snug">
+                          {preset.description}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Posisi Stempel */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <span className="text-xs font-semibold uppercase text-slate-300 block">
+                  Posisi Stempel di Foto
+                </span>
+                <select
+                  value={settings.textPosition}
+                  onChange={(e) => updateSetting('textPosition', e.target.value as TextPosition)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200"
+                >
+                  {Object.values(TextPosition).map((pos) => (
+                    <option key={pos} value={pos}>
+                      {pos}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Warna & Transparansi */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <span className="text-xs font-semibold uppercase text-slate-300 block">
+                  Warna & Transparansi
+                </span>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-slate-400 block mb-1">Warna Teks</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="color"
+                        value={settings.textColor}
+                        onChange={(e) => updateSetting('textColor', e.target.value)}
+                        className="w-8 h-8 rounded border border-slate-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={settings.textColor}
+                        onChange={(e) => updateSetting('textColor', e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-200"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-slate-400 block mb-1">Warna Aksen / Bar</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="color"
+                        value={settings.accentColor || '#f59e0b'}
+                        onChange={(e) => updateSetting('accentColor', e.target.value)}
+                        className="w-8 h-8 rounded border border-slate-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={settings.accentColor || '#f59e0b'}
+                        onChange={(e) => updateSetting('accentColor', e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-200"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                    <span>Opasitas Latar Belakang (Transparansi Box)</span>
+                    <span>{settings.backgroundOpacity}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={settings.backgroundOpacity}
+                    onChange={(e) => updateSetting('backgroundOpacity', Number(e.target.value))}
+                    className="w-full accent-blue-500 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="textShadowCheck"
+                    checked={settings.textShadow}
+                    onChange={(e) => updateSetting('textShadow', e.target.checked)}
+                    className="rounded bg-slate-700 border-slate-600 text-blue-500"
+                  />
+                  <label htmlFor="textShadowCheck" className="text-xs text-slate-300 cursor-pointer">
+                    Efek Drop Shadow Teks (Tajam & Jelas)
+                  </label>
+                </div>
+              </div>
+
+              {/* Ukuran Font Terperinci */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <span className="text-xs font-semibold uppercase text-slate-300 block">
+                  Ukuran Teks
+                </span>
+
+                <div className="space-y-2.5">
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Waktu & Jam</span>
+                      <span>{settings.timeFontSize}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="14"
+                      max="60"
+                      value={settings.timeFontSize}
+                      onChange={(e) => updateSetting('timeFontSize', Number(e.target.value))}
+                      className="w-full accent-blue-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Tanggal</span>
+                      <span>{settings.dateFontSize}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="12"
+                      max="48"
+                      value={settings.dateFontSize}
+                      onChange={(e) => updateSetting('dateFontSize', Number(e.target.value))}
+                      className="w-full accent-blue-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Lokasi & Alamat</span>
+                      <span>{settings.locationFontSize}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="12"
+                      max="40"
+                      value={settings.locationFontSize}
+                      onChange={(e) => updateSetting('locationFontSize', Number(e.target.value))}
+                      className="w-full accent-blue-500 cursor-pointer"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: EDIT FOTO */}
+          {activeTab === 'image' && (
+            <div className="space-y-4">
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <span className="text-xs font-semibold uppercase text-slate-300 block">
+                  Orientasi & Rotasi Foto
+                </span>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handleRotate}
+                    icon={<RotateCw size={14} />}
+                  >
+                    Putar 90° ({settings.rotation}°)
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => updateSetting('flipHorizontal', !settings.flipHorizontal)}
+                  >
+                    {settings.flipHorizontal ? 'Flip Aktif' : 'Flip Normal'}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Adjustments */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/60 space-y-3">
+                <span className="text-xs font-semibold uppercase text-slate-300 block">
+                  Penyesuaian Kualitas Gambar
+                </span>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Kecerahan (Brightness)</span>
+                      <span>{settings.brightness}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="60"
+                      max="140"
+                      value={settings.brightness}
+                      onChange={(e) => updateSetting('brightness', Number(e.target.value))}
+                      className="w-full accent-blue-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Kontras</span>
+                      <span>{settings.contrast}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="60"
+                      max="140"
+                      value={settings.contrast}
+                      onChange={(e) => updateSetting('contrast', Number(e.target.value))}
+                      className="w-full accent-blue-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Saturasi Warna</span>
+                      <span>{settings.saturation}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="40"
+                      max="160"
+                      value={settings.saturation}
+                      onChange={(e) => updateSetting('saturation', Number(e.target.value))}
+                      className="w-full accent-blue-500 cursor-pointer"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: GEMINI AI */}
+          {activeTab === 'ai' && (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-br from-indigo-950/40 via-blue-950/30 to-slate-900 p-5 rounded-2xl border border-blue-500/20 space-y-4 shadow-lg">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl text-white shadow-md">
+                    <Sparkles size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-sm">Analisis Visual Gemini AI</h3>
+                    <p className="text-[11px] text-slate-400">
+                      Model Gemini 3.8 Flash mendeteksi lokasi visual, cuaca, dan deskripsi lapangan
+                    </p>
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Cukup upload foto, lalu jalankan analisis AI. Gemini akan mengidentifikasi landmark,
+                  kota/provinsi, perkiraan koordinat, kondisi cuaca, dan membuat catatan dokumentasi
+                  lapangan secara otomatis.
+                </p>
+
+                <Button
+                  variant="primary"
+                  size="md"
+                  className="w-full"
+                  onClick={handleGeminiAnalysis}
+                  disabled={!imageSrc}
+                  isLoading={isAnalyzing}
+                  icon={<Sparkles size={16} />}
+                >
+                  {isAnalyzing ? 'Menganalisis Foto...' : 'Jalankan Analisis AI'}
+                </Button>
+
+                {!imageSrc && (
+                  <p className="text-[11px] text-amber-400/90 text-center">
+                    Silakan upload atau ambil foto terlebih dahulu.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* BOTTOM EXPORT & SHARE BAR */}
+        <div className="p-4 border-t border-slate-800 bg-[#0c1322] space-y-2">
+          <Button
+            onClick={handleDownload}
+            disabled={!imageSrc}
             className="w-full"
+            variant="primary"
+            size="md"
             icon={<Download size={18} />}
           >
-            Save to Gallery (with EXIF)
+            Simpan & Unduh Foto (EXIF GPS)
           </Button>
 
-          <div className="grid grid-cols-1 gap-2">
+          <div className="flex gap-2">
             <Button
               onClick={handleShare}
               disabled={!imageSrc}
               variant="secondary"
-              className="w-full"
-              icon={<Share2 size={16} />}
+              size="sm"
+              className="flex-1 text-xs"
+              icon={<Share2 size={15} />}
             >
-              Share Image
+              Bagikan / Salin
+            </Button>
+            <Button
+              onClick={() => setSettings(DEFAULT_SETTINGS)}
+              variant="outline"
+              size="sm"
+              className="text-xs px-3"
+              title="Reset ke Pengaturan Awal"
+            >
+              <RefreshCcw size={14} />
             </Button>
           </div>
         </div>
       </aside>
 
-      {/* Main Canvas Area */}
-      <main className="flex-1 bg-slate-900 p-8 flex flex-col h-screen overflow-hidden relative">
-        <div className="flex justify-end mb-4">
-           {imageSrc && (
-             <button 
-              onClick={() => {
-                setSettings(DEFAULT_SETTINGS);
-              }}
-              className="text-slate-400 hover:text-white flex items-center gap-2 text-sm transition-colors"
-             >
-               <RefreshCcw size={14} /> Reset Settings
-             </button>
-           )}
+      {/* MAIN CANVAS PREVIEW STAGE */}
+      <main className="flex-1 bg-[#070a12] flex flex-col h-full overflow-hidden relative">
+        {/* Top Header Bar */}
+        <div className="px-6 py-3 border-b border-slate-800/80 bg-[#090d16]/70 backdrop-blur-md flex justify-between items-center z-10">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-300">Live Preview Watermark</span>
+            {imageSrc && (
+              <span className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
+                Resolusi Penuh Aktif
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {imageSrc && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleRotate}
+                icon={<RotateCw size={14} />}
+                className="text-xs"
+              >
+                Putar
+              </Button>
+            )}
+          </div>
         </div>
-        
-        <div className="flex-1 relative bg-slate-950/50 rounded-2xl border border-dashed border-slate-800 flex items-center justify-center p-4 overflow-hidden">
-          <ImageCanvas 
-            imageSrc={imageSrc} 
-            settings={settings} 
-            onCanvasReady={handleCanvasReady} 
+
+        {/* Canvas Center Area */}
+        <div className="flex-1 p-4 md:p-6 lg:p-8 flex items-center justify-center overflow-hidden">
+          <ImageCanvas
+            imageSrc={imageSrc}
+            settings={settings}
+            onCanvasReady={handleCanvasReady}
           />
         </div>
       </main>

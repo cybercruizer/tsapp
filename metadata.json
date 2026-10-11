@@ -1,8 +1,11 @@
 {
   "name": "MKD-Timestamp",
-  "description": "Add customizable, professional timestamps and location data to your photos using Canvas and AI for metadata extraction.",
+  "description": "Aplikasi timestamp foto profesional dengan custom waktu, lokasi GPS, peta, dan analisis visual Gemini AI.",
   "requestFramePermissions": [
-    "geolocation"
+    "geolocation",
+    "camera"
   ],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
